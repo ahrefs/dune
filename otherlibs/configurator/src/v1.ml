@@ -657,14 +657,18 @@ module Pkg_config = struct
     ; configurator : t
     }
 
-  let get ?(static=false) c =
+  let get c =
     let get_pkg_config_args default =
       let args =
         match Sys.getenv "PKG_CONFIG_ARGN" with
         | s -> String.split ~on:' ' s
         | exception Not_found -> default
       in
-      if static then "--static" :: args else args
+      match String.lowercase_ascii (Sys.getenv "OPAM_REPOSITORY_PACKAGES_OPTION_STATIC_LINKING") with
+      | "true" -> "--static" :: args
+      | "false" -> args
+      | s -> die "configurator detected unexpected value for variable OPAM_REPOSITORY_PACKAGES_OPTION_STATIC_LINKING: %S" s
+      | exception Not_found -> args
     in
     match Sys.getenv "PKG_CONFIG" with
     | s ->
