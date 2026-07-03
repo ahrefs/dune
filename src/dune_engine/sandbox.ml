@@ -1,7 +1,7 @@
 open Import
 
 let sandbox_dir = Path.Build.relative Path.Build.root ".sandbox"
-let max_live_sandboxes = 250
+let max_live_sandboxes = max_int
 let live_sandbox_throttle = lazy (Fiber.Throttle.create max_live_sandboxes)
 let with_live_sandbox_slot ~f = Fiber.Throttle.run (Lazy.force live_sandbox_throttle) ~f
 
