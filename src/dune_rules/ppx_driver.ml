@@ -324,7 +324,12 @@ let build_ppx_driver sctx ~scope ~target ~pps ~pp_names =
       ; loc = Loc.none
       }
     in
-    Exe.build_and_link ~program ~linkages cctx ~promote:None
+    let link_args =
+      match Sys.getenv_opt "DUNE_PPX_DRIVER_NO_PIE" with
+      | Some "1" -> Action_builder.return (Command.Args.As [ "-ccopt"; "-no-pie" ])
+      | _ -> Action_builder.return (Command.Args.As [])
+    in
+    Exe.build_and_link ~link_args ~program ~linkages cctx ~promote:None
   in
   ()
 ;;
