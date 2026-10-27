@@ -57,8 +57,6 @@ form `foo.bar.baz`
 
   $ OCAMLPATH=$PWD/prefix/lib/:$OCAMLPATH dune build --root app @dist --display short 2>&1 | grep -v melange
   Entering directory 'app'
-          melc dist/node_modules/a.sub/a.js
-          melc dist/node_modules/a.sub/foo.js
           melc dist/bar.js
   Leaving directory 'app'
 

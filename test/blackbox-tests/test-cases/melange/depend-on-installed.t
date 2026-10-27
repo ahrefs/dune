@@ -93,11 +93,12 @@ Test dependency on installed package
   >  (libraries b))
   > EOF
 
-  $ OCAMLPATH=$PWD/prefix/lib/:$OCAMLPATH dune build --root app @melange-dist --display=short
+  $ OCAMLPATH=$PWD/prefix/lib/:$OCAMLPATH dune build --root app @melange-dist --display=short 2>&1 |
+  > sed -E 's/[0-9a-f]{32}/$DIGEST/'
   Entering directory 'app'
-          melc dist/node_modules/a/a.js
-          melc dist/node_modules/a/foo.js
-          melc dist/node_modules/b/b.js
-          melc dist/node_modules/b/bar.js
-          melc dist/node_modules/b/foo.js
+          melc .melange/$DIGEST/node_modules/a/a.js
+          melc .melange/$DIGEST/node_modules/a/foo.js
+          melc .melange/$DIGEST/node_modules/b/b.js
+          melc .melange/$DIGEST/node_modules/b/bar.js
+          melc .melange/$DIGEST/node_modules/b/foo.js
   Leaving directory 'app'

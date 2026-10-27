@@ -14,15 +14,12 @@ Cmj rules should include --bs-package-name
 
   $ output=my_project/output
 
-Js rules should include --bs-module-type
-  $ dune rules $output/node_modules/pkg.app/b.js |
-  > grep -e "--bs-module-type" --after-context=1
+Library JS is copied from a shared emission; its rule should include
+--bs-module-type and --bs-package-name
+  $ dune rules -r $output/node_modules/pkg.app/b.js |
+  > grep -e "--bs-module-type" --after-context=3
       --bs-module-type
       commonjs
-
-Js rules should include --bs-package-name
-  $ dune rules $output/node_modules/pkg.app/b.js |
-  > grep -e "--bs-package-name" --after-context=1
       --bs-package-name
       pkg
 

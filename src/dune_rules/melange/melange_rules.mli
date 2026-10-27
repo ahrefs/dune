@@ -12,3 +12,7 @@ val setup_emit_js_rules
   :  Super_context.t Memo.t
   -> dir:Path.Build.t
   -> Build_config.Gen_rules.t Memo.t
+
+(** Rules for [_build/<context>/.melange/<key>], the directory where library
+    JavaScript is emitted once per emission configuration. *)
+val setup_shared_rules : Super_context.t -> dir:Path.Build.t -> string -> unit Memo.t
