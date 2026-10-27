@@ -291,10 +291,18 @@ let build_ppx_driver sctx ~scope ~target ~pps ~pp_names =
             (let open Resolve.O in
              let+ driver, _ = driver_and_libs in
              sprintf "let () = %s ()\n" driver.info.main)))
-  and* linkages =
+  and* linkages, link_args =
     let ctx = Super_context.context sctx in
     let+ ocaml = Context.ocaml ctx in
-    [ Exe.Linkage.native_or_custom ocaml ]
+    (* Drivers never leave _build, so they don't need PIE. A PIE driver
+       relocates its static data on every start, and concurrent starts of the
+       same driver contend on the copy-on-write faults this causes. *)
+    let link_args =
+      match Ocaml_config.system ocaml.ocaml_config with
+      | "linux" -> Command.Args.As [ "-ccopt"; "-no-pie" ]
+      | _ -> Command.Args.As []
+    in
+    [ Exe.Linkage.native_or_custom ocaml ], Action_builder.return link_args
   and+ cctx =
     let obj_dir = Obj_dir.for_pp ~dir in
     let requires_compile = Resolve.map driver_and_libs ~f:snd in
@@ -323,11 +331,6 @@ let build_ppx_driver sctx ~scope ~target ~pps ~pp_names =
       ; main_module_name
       ; loc = Loc.none
       }
-    in
-    let link_args =
-      match Sys.getenv_opt "DUNE_PPX_DRIVER_NO_PIE" with
-      | Some "1" -> Action_builder.return (Command.Args.As [ "-ccopt"; "-no-pie" ])
-      | _ -> Action_builder.return (Command.Args.As [])
     in
     Exe.build_and_link ~link_args ~program ~linkages cctx ~promote:None
   in
