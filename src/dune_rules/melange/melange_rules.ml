@@ -109,9 +109,13 @@ module Shared = struct
        must not embed values that are not safe to keep between builds. *)
     type t =
       { project_root : Path.Source.t
-        (* Project of the [melange.emit] stanza. Libraries are resolved in its
-           scope, and the melange extension version comes from it. *)
+        (* Project of the [melange.emit] stanza. The library closure is
+           computed in its scope, and the melange extension version comes
+           from it. *)
       ; lib : Lib_name.t
+      ; lib_project_root : Path.Source.t option
+        (* Project of [lib] when it is private: private library names are
+           only unique within a project. *)
       ; allow_overlaps : bool
       ; module_system : Melange.Module_system.t
       ; js_ext : Filename.Extension.t
@@ -123,6 +127,8 @@ module Shared = struct
         "melange-emission-config"
         [ Repr.field "project_root" Path.Source.repr ~get:(fun t -> t.project_root)
         ; Repr.field "lib" Lib_name.repr ~get:(fun t -> t.lib)
+        ; Repr.field "lib_project_root" (Repr.option Path.Source.repr) ~get:(fun t ->
+            t.lib_project_root)
         ; Repr.field "allow_overlaps" Repr.bool ~get:(fun t -> t.allow_overlaps)
         ; Repr.field
             "module_system"
@@ -141,6 +147,7 @@ module Shared = struct
     let equal x y =
       Path.Source.equal x.project_root y.project_root
       && Lib_name.equal x.lib y.lib
+      && Option.equal Path.Source.equal x.lib_project_root y.lib_project_root
       && Bool.equal x.allow_overlaps y.allow_overlaps
       && (match x.module_system, y.module_system with
           | Melange.Module_system.ESM, Melange.Module_system.ESM | CommonJS, CommonJS ->
@@ -188,14 +195,14 @@ module Shared = struct
   (* The part of the configuration shared by all the libraries of a
      [melange.emit] stanza. *)
   type t =
-    { build_dir : Path.Build.t
-    ; project_root : Path.Source.t
+    { project_root : Path.Source.t
     ; allow_overlaps : bool
     ; flags : string list
     }
 
   let lib_dir
-        { build_dir; project_root; allow_overlaps; flags }
+        { project_root; allow_overlaps; flags }
+        ~build_dir
         ~module_system
         ~js_ext
         lib
@@ -204,6 +211,10 @@ module Shared = struct
       encode
         { Config.project_root
         ; lib = Lib.name lib
+        ; lib_project_root =
+            (match Lib_info.status (Lib.info lib) with
+             | Private (project, _) -> Some (Dune_project.root project)
+             | Public _ | Installed _ | Installed_private _ -> None)
         ; allow_overlaps
         ; module_system
         ; js_ext
@@ -1052,8 +1063,7 @@ let library_emission
       | Ok melc, Ok shared_melc
         when Path.equal melc shared_melc && Env.equal env shared_env ->
         Shared
-          { Shared.build_dir
-          ; project_root = Dune_project.root (Scope.project scope)
+          { Shared.project_root = Dune_project.root (Scope.project scope)
           ; allow_overlaps = mel.allow_overlapping_dependencies
           ; flags
           }
@@ -1066,10 +1076,11 @@ let copy_shared_js ~sctx ~scope ~dir ~mode ~module_systems ~output ~shared lib =
   let loc = Lib_info.loc info in
   let project = Scope.project scope in
   let promote_in_source = should_promote_in_source scope in
+  let build_dir = Super_context.context sctx |> Context.build_dir in
   Nonempty_list.to_list module_systems
   |> Memo.parallel_iter ~f:(fun (module_system, js_ext) ->
     let shared_output =
-      let target_dir = Shared.lib_dir shared ~module_system ~js_ext lib in
+      let target_dir = Shared.lib_dir shared ~build_dir ~module_system ~js_ext lib in
       output_of_lib ~target_dir ~info lib
     in
     Memo.parallel_iter source_modules ~f:(fun m ->
@@ -1089,7 +1100,7 @@ let copy_shared_js ~sctx ~scope ~dir ~mode ~module_systems ~output ~shared lib =
 ;;
 
 let setup_shared_rules sctx ~dir key =
-  let { Shared.Config.project_root; lib; allow_overlaps; module_system; js_ext; flags } =
+  let config =
     match Digest.from_hex key with
     | Some key -> Shared.decode key
     | None ->
@@ -1099,18 +1110,32 @@ let setup_shared_rules sctx ~dir key =
             (Path.Build.to_string_maybe_quoted dir)
         ]
   in
+  let { Shared.Config.project_root
+      ; lib
+      ; lib_project_root
+      ; allow_overlaps
+      ; module_system
+      ; js_ext
+      ; flags
+      }
+    =
+    config
+  in
   let ctx = Super_context.context sctx in
   let* scope = Scope.DB.find_by_project_root ctx (Some project_root) in
   let* lib =
-    Lib.DB.find_even_when_hidden (Scope.libs scope) lib
+    let* db =
+      match lib_project_root with
+      | Some _ -> Scope.DB.find_by_project_root ctx lib_project_root >>| Scope.libs
+      | None -> Scope.DB.public_libs (Context.name ctx)
+    in
+    Lib.DB.find_even_when_hidden db lib
     >>| function
     | Some lib -> lib
     | None ->
-      User_error.raise
-        [ Pp.textf
-            "Library %S used by a melange.emit stanza no longer exists."
-            (Lib_name.to_string lib)
-        ]
+      Code_error.raise
+        "library of a melange emission configuration not found"
+        [ "config", Shared.Config.to_dyn config ]
   in
   let* lib_config =
     let+ ocaml = Context.ocaml ctx in
