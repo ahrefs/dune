@@ -20,8 +20,10 @@ under _build/default.
 
 usage: shared_emission.py --dune NAME=PATH [--dune NAME=PATH ...] [--emits 1,2,4,8]
                 [--libs 20] [--mods 25] [--reps 3] [--jobs N] [--work DIR]
+                [--cache]
 
-melc and node must be on PATH. The cache is disabled for every build.
+melc and node must be on PATH. The shared cache is disabled except in the
+cache_cold and cache_warm phases, which use a fresh DUNE_CACHE_ROOT.
 """
 
 import argparse
