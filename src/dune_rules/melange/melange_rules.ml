@@ -1051,7 +1051,7 @@ let copy_shared_js
       let target_dir =
         Shared.dir
           ~build_dir
-          { project_root = Dune_project.root project
+          { Shared.project_root = Dune_project.root project
           ; lib = Lib.name lib
           ; lib_project_root = Lib.L.project_root [ lib ]
           ; allow_overlaps = mel.allow_overlapping_dependencies
@@ -1079,16 +1079,6 @@ let copy_shared_js
 ;;
 
 let setup_shared_rules sctx ~dir key =
-  let config =
-    match Digest.from_hex key with
-    | Some key -> Shared.decode key
-    | None ->
-      User_error.raise
-        [ Pp.textf
-            "invalid melange emission directory %s"
-            (Path.Build.to_string_maybe_quoted dir)
-        ]
-  in
   let { Shared.project_root
       ; lib
       ; lib_project_root
@@ -1098,7 +1088,14 @@ let setup_shared_rules sctx ~dir key =
       ; flags
       }
     =
-    config
+    match Digest.from_hex key with
+    | Some key -> Shared.decode key
+    | None ->
+      User_error.raise
+        [ Pp.textf
+            "invalid melange emission directory %s"
+            (Path.Build.to_string_maybe_quoted dir)
+        ]
   in
   let ctx = Super_context.context sctx in
   let* scope = Scope.DB.find_by_project_root ctx (Some project_root) in
@@ -1112,9 +1109,12 @@ let setup_shared_rules sctx ~dir key =
     >>| function
     | Some lib -> lib
     | None ->
-      Code_error.raise
-        "library of a melange emission configuration not found"
-        [ "config", Shared.to_dyn config ]
+      User_error.raise
+        [ Pp.textf
+            "Library %S of melange emission directory %s not found."
+            (Lib_name.to_string lib)
+            (Path.Build.to_string_maybe_quoted dir)
+        ]
   in
   let* lib_config =
     let+ ocaml = Context.ocaml ctx in
