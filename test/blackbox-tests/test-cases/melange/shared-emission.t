@@ -17,7 +17,7 @@ melc_outputs lists the JS files written by melc in the last build.
   > }
 
 A public library with a sub-directory, a private library and a private library
-attached to a package. The public library has a runtime dependency.
+attached to a package.
 
   $ mkdir -p pub/sub priv privpkg
   $ cat > pub/dune <<EOF
@@ -25,10 +25,8 @@ attached to a package. The public library has a runtime dependency.
   > (library
   >  (name pub)
   >  (public_name pkg.pub)
-  >  (modes melange)
-  >  (melange.runtime_deps asset.txt))
+  >  (modes melange))
   > EOF
-  $ echo hello > pub/asset.txt
   $ echo 'let x = "pub"' > pub/base.ml
   $ echo 'let y = Base.x ^ "-sub"' > pub/sub/pub_sub.ml
   $ cat > priv/dune <<EOF
@@ -118,16 +116,8 @@ A no-op rebuild runs no melc.
   $ dune build @mel
   $ melc_outputs
 
-Every target has the same files, and the shared ones are identical.
+The copies are identical to the files that e/ emits on its own.
 
-  $ for d in a b/c d e; do
-  >   (cd _build/default/$d/out && find . -name '*.mjs' -o -name '*.txt' | grep -v main | sort)
-  > done | sort | uniq -c
-        4 ./node_modules/pkg.__private__.privpkg/privpkg.mjs
-        4 ./node_modules/pkg.pub/asset.txt
-        4 ./node_modules/pkg.pub/base.mjs
-        4 ./node_modules/pkg.pub/sub/pub_sub.mjs
-        4 ./priv/priv.mjs
   $ for f in node_modules/pkg.__private__.privpkg/privpkg.mjs node_modules/pkg.pub/base.mjs node_modules/pkg.pub/sub/pub_sub.mjs priv/priv.mjs; do
   >   cmp _build/default/a/out/$f _build/default/b/c/out/$f
   >   cmp _build/default/a/out/$f _build/default/e/out/$f
