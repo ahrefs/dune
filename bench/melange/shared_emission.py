@@ -8,6 +8,11 @@ measures for each dune binary:
 - cold: build @mel from an empty _build
 - noop: build @mel again
 - edit: change one module of the first library, build @mel
+- with --cache: with the shared cache enabled and empty, build from an empty
+  _build (cache_cold), then again from an empty _build (cache_warm)
+
+After each repetition, the files under every melange.emit target are compared
+between the binaries (targets_identical in the summary).
 
 Each measurement reports wall time, CPU time of dune and all its children,
 the number of melc processes (from `dune trace cat`) and the number of files
@@ -20,6 +25,7 @@ melc and node must be on PATH. The cache is disabled for every build.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import resource
@@ -103,12 +109,16 @@ def count_files(root):
     return n
 
 
-def build(dune, root, jobs):
-    cmd = [dune, "build", "@mel", "--root", root, "--cache=disabled"]
+def build(dune, root, jobs, cache_root=None):
+    cmd = [dune, "build", "@mel", "--root", root]
     if jobs:
         cmd += ["-j", str(jobs)]
+    if cache_root:
+        env = {**os.environ, "DUNE_CACHE": "enabled", "DUNE_CACHE_ROOT": cache_root}
+    else:
+        env = {**os.environ, "DUNE_CACHE": "disabled"}
     cpu0, t0 = children_cpu(), time.monotonic()
-    subprocess.run(cmd, check=True, env={**os.environ, "DUNE_CACHE": "disabled"})
+    subprocess.run(cmd, check=True, env=env)
     wall, cpu = time.monotonic() - t0, children_cpu() - cpu0
     return {
         "wall_s": wall,
@@ -133,12 +143,41 @@ def run_once(dune, root, args, emits, check_output):
     with open(f"{root}/l0/m0.ml", "a") as f:
         f.write("\nlet edited = 1\n")
     res["edit"] = build(dune, root, args.jobs)
+    res["targets"] = target_digests(root)
+    if args.cache:
+        # Shared cache enabled, starting empty: a cold build fills it, then a
+        # build from an empty _build restores from it.
+        cache_root = root + "-cache"
+        shutil.rmtree(cache_root, ignore_errors=True)
+        shutil.rmtree(os.path.join(root, "_build"))
+        res["cache_cold"] = build(dune, root, args.jobs, cache_root)
+        shutil.rmtree(os.path.join(root, "_build"))
+        res["cache_warm"] = build(dune, root, args.jobs, cache_root)
+        shutil.rmtree(cache_root)
     return res
+
+
+def target_digests(root):
+    """sha256 of every file under the melange.emit targets."""
+    out = {}
+    base = os.path.join(root, "_build", "default")
+    for app in sorted(os.listdir(base)):
+        top = os.path.join(base, app, "out")
+        if not app.startswith("app") or not os.path.isdir(top):
+            continue
+        for dirpath, _, files in os.walk(top):
+            for f in files:
+                path = os.path.join(dirpath, f)
+                with open(path, "rb") as fh:
+                    out[os.path.relpath(path, base)] = hashlib.sha256(fh.read()).hexdigest()
+    return out
 
 
 def median_runs(runs):
     out = {}
-    for phase in ("cold", "noop", "edit"):
+    for phase in ("cold", "noop", "edit", "cache_cold", "cache_warm"):
+        if phase not in runs[0]:
+            continue
         out[phase] = {
             k: statistics.median(r[phase][k] for r in runs)
             for k in ("wall_s", "cpu_s", "melc", "files")
@@ -155,6 +194,7 @@ def main():
     p.add_argument("--reps", type=int, default=3)
     p.add_argument("--jobs", type=int, default=0)
     p.add_argument("--work", default=None)
+    p.add_argument("--cache", action="store_true", help="also measure with the shared cache")
     args = p.parse_args()
     dunes = [d.split("=", 1) for d in args.dune]
     work = args.work or tempfile.mkdtemp(prefix="melange-bench-")
@@ -167,14 +207,25 @@ def main():
                 root = os.path.join(work, f"{name}-e{emits}")
                 r = run_once(dune, root, args, emits, check_output=True)
                 results.append({"dune": name, "emits": emits, "rep": rep, **r})
-                print(json.dumps(results[-1]), file=sys.stderr, flush=True)
+                print(json.dumps({k: v for k, v in results[-1].items() if k != "targets"}),
+                      file=sys.stderr, flush=True)
+            # Every binary must produce the same files in every target.
+            this_rep = [r for r in results if r["emits"] == emits and r["rep"] == rep]
+            first = this_rep[0]["targets"]
+            for r in this_rep:
+                r["targets_identical_to_" + this_rep[0]["dune"]] = r["targets"] == first
+                r["target_files"] = len(r["targets"])
+                del r["targets"]
     summary = []
     for emits in sorted({r["emits"] for r in results}):
         for name, _ in dunes:
             runs = [r for r in results if r["emits"] == emits and r["dune"] == name]
             outputs = {r["output"] for r in runs}
+            identical = all(v for r in runs for k, v in r.items() if k.startswith("targets_identical_to_"))
             summary.append(
-                {"dune": name, "emits": emits, "outputs": sorted(outputs), **median_runs(runs)}
+                {"dune": name, "emits": emits, "outputs": sorted(outputs),
+                 "target_files": runs[0]["target_files"], "targets_identical": identical,
+                 **median_runs(runs)}
             )
     print(json.dumps({"libs": args.libs, "mods": args.mods, "reps": args.reps,
                       "jobs": args.jobs, "summary": summary, "runs": results}, indent=1))
