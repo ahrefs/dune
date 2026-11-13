@@ -1106,7 +1106,7 @@ let setup_shared_rules sctx ~dir key =
       | Some _ -> Scope.DB.find_by_project_root ctx lib_project_root >>| Scope.libs
       | None -> Scope.DB.public_libs (Context.name ctx)
     in
-    Lib.DB.find_even_when_hidden db lib
+    Lib.DB.find db lib
     >>| function
     | Some lib -> lib
     | None ->
