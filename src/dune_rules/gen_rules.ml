@@ -707,7 +707,7 @@ let gen_rules ctx sctx ~dir components : Gen_rules.t Memo.t =
          Pp_spec_rules.gen_rules sctx rest)
   | ".melange" :: rest ->
     (match rest with
-     | [] -> has_rules ~dir Subdir_set.all (fun () -> Memo.return ())
+     | [] -> Memo.return (Gen_rules.make_empty ~dir Subdir_set.all)
      | [ key ] ->
        has_rules ~dir Subdir_set.empty (fun () ->
          let* sctx = sctx in

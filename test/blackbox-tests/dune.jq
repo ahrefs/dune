@@ -122,6 +122,10 @@ def ruleActionsNamed($name):
 def ruleActionRunArgv:
   ruleActionsNamed("run") | .[1:];
 
+# Rules that run a program to produce [$path], skipping rules that copy it.
+def runRulesMatchingTarget($path):
+  rulesMatchingTarget($path) | select(any(ruleActionsNamed("run"); true));
+
 def argListContainsSequence($seq):
   . as $args
   | ($seq | length) as $n

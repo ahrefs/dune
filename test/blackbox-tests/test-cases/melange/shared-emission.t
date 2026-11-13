@@ -12,7 +12,7 @@ melc_outputs lists the JS files written by melc in the last build.
 
   $ melc_outputs () {
   >   dune trace cat |
-  >   jq_dune -r 'processes | .args | select(.prog | endswith("/melc")) | .target_files[]? | select(test("\\.m?js$"))' |
+  >   jq_dune -r 'progMatchingFilter(. == "melc") | .target_files[]? | select(test("\\.m?js$"))' |
   >   sed -E 's#^_build/default/##; s#\.melange/[0-9a-f]+/#.melange/$DIGEST/#' | sort
   > }
 
@@ -108,7 +108,7 @@ One directory per library and configuration: 3 libraries times es6/mjs,
 commonjs/js and the flags of d/. The stanza in e/ has its own environment and
 emits its own copy.
 
-  $ ls _build/default/.melange | wc -l | tr -d ' '
+  $ ls _build/default/.melange | dune_cmd count-lines
   9
 
 A no-op rebuild runs no melc.
@@ -175,8 +175,7 @@ Changing a library re-emits it once per configuration and updates every target.
   $ node a/out/a/main.mjs
   PUB-sub-privpkg
 
-A library used by a single stanza is shared too, and the stdlib is shared
-between stanzas that emit it.
+Stanzas that emit the stdlib share it.
 
   $ mkdir f g
   $ cat > f/dune <<EOF

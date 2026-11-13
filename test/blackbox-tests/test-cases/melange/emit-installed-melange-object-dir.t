@@ -46,7 +46,7 @@ files in its Melange object directory.
   $ OCAMLPATH=$PWD/prefix/lib:$OCAMLPATH \
   >   dune rules -r --root app --format=json --display=quiet \
   >   dist/node_modules/repro.foo/errors.js |
-  > jq_dune '[ rulesMatchingTargetFilter(test("/\\.melange/[0-9a-f]+/node_modules/repro\\.foo/errors\\.js$")) | .deps ]' > deps.json
+  > jq_dune '[ runRulesMatchingTarget("node_modules/repro.foo/errors.js") | .deps ]' > deps.json
 
 Print the selectors so their directories can be compared with the installed
 files above.

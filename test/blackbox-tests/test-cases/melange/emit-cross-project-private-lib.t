@@ -24,18 +24,13 @@ target under its mangled name.
   > (melange.emit (target out) (alias mel) (emit_stdlib false) (libraries b.pub))
   > EOF
   $ echo 'let () = Js.log Pub.v' > a/main.ml
-  $ dune build @a/mel
-  $ cat _build/default/a/out/node_modules/b.__private__.priv/priv.js | grep '"b"'
-  const v = "b";
 
-Project a also has a private library named priv. The target still gets the
-one from project b.
+Project a also has a private library named priv. The target gets the one from
+project b.
 
   $ mkdir a/priv
-  $ cat > a/priv/dune <<EOF
-  > (library (name priv) (modes melange))
-  > EOF
+  $ echo '(library (name priv) (modes melange))' > a/priv/dune
   $ echo 'let v = "a"' > a/priv/priv.ml
   $ dune build @a/mel
-  $ cat _build/default/a/out/node_modules/b.__private__.priv/priv.js | grep '"b"'
+  $ grep '"b"' _build/default/a/out/node_modules/b.__private__.priv/priv.js
   const v = "b";

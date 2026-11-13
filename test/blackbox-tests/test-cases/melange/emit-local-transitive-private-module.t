@@ -14,7 +14,7 @@ transitive implementation closure, even across `.mli` boundaries.
   $ write_melange_repro_foo_consumer
 
   $ dune rules -r --root . --format=json app/dist/node_modules/repro.foo/foo_map.js |
-  > jq_dune -r 'rulesMatchingTargetFilter(test("/\\.melange/[0-9a-f]+/node_modules/repro\\.foo/foo_map\\.js$")) | ruleDepFilePaths | select(test("lib/\\.foo\\.objs/melange/.*\\.cmj$")) | sub("^_build/default/"; "")'
+  > jq_dune -r 'runRulesMatchingTarget("node_modules/repro.foo/foo_map.js") | ruleDepFilePaths | select(test("lib/\\.foo\\.objs/melange/.*\\.cmj$")) | sub("^_build/default/"; "")'
   lib/.foo.objs/melange/foo__Foo_internalAVLtree.cmj
   lib/.foo.objs/melange/foo__Foo_internalMapInt.cmj
   lib/.foo.objs/melange/foo__Foo_map.cmj

@@ -57,6 +57,6 @@ stage the installed Melange object dirs rather than only the entry module's
   $ write_melange_repro_foo_consumer
 
   $ OCAMLPATH=$PWD/prefix/lib:$OCAMLPATH dune rules -r --format=json --root app --display=quiet dist/node_modules/repro.foo/foo_map.js |
-  > jq_dune '[ rulesMatchingTargetFilter(test("/\\.melange/[0-9a-f]+/node_modules/repro\\.foo/foo_map\\.js$")) | .deps ]' > deps.json
+  > jq_dune '[ runRulesMatchingTarget("node_modules/repro.foo/foo_map.js") | .deps ]' > deps.json
   $ jq_dune -r '.[] | depsGlobEntriesWithPredicate("*{.cmi,.cmj}") | select(.dir | endswith("/repro/foo/melange")) | "\(.dir_kind) \(.dir)"' deps.json
   External $TESTCASE_ROOT/prefix/lib/repro/foo/melange

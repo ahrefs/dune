@@ -179,10 +179,10 @@ module Shared = struct
         ]
   ;;
 
-  let root ~build_dir = Path.Build.relative_fname build_dir Filename.melange_dir_basename
-
   let dir ~build_dir t =
-    Path.Build.relative (root ~build_dir) (Digest.to_string (encode t))
+    Path.Build.relative
+      (Path.Build.relative_fname build_dir Filename.melange_dir_basename)
+      (Digest.to_string (encode t))
   ;;
 end
 
@@ -994,6 +994,7 @@ type library_emission =
 
 let library_emission
       ~sctx
+      ~scope
       ~dir
       ~requires_link
       ~compile_flags
@@ -1012,15 +1013,16 @@ let library_emission
     then Memo.return Per_target
     else (
       (* The shared rules run with the [melc] and the environment of the
-         context root. *)
-      let shared_root =
-        Shared.root ~build_dir:(Super_context.context sctx |> Context.build_dir)
+         project root. *)
+      let project_dir =
+        Path.Build.append_source
+          (Super_context.context sctx |> Context.build_dir)
+          (Dune_project.root (Scope.project scope))
       in
-      let external_env dir = Super_context.env_node sctx ~dir >>= Env_node.external_env in
       let+ melc = Melange_binary.melc sctx ~loc:(Some mel.loc) ~dir
-      and+ shared_melc = Melange_binary.melc sctx ~loc:(Some mel.loc) ~dir:shared_root
-      and+ env = external_env dir
-      and+ shared_env = external_env shared_root in
+      and+ shared_melc = Melange_binary.melc sctx ~loc:(Some mel.loc) ~dir:project_dir
+      and+ env = Super_context.context_env_by_dir sctx ~dir
+      and+ shared_env = Super_context.context_env_by_dir sctx ~dir:project_dir in
       match melc, shared_melc with
       | Ok melc, Ok shared_melc
         when Path.equal melc shared_melc && Env.equal env shared_env -> Shared { flags }
@@ -1128,7 +1130,7 @@ let setup_shared_rules sctx ~dir key =
     ~f:
       (build_js
          ~loc:(Lib_info.loc info)
-         ~dir
+         ~dir:(Path.Build.append_source (Context.build_dir ctx) project_root)
          ~scope
          ~pkg_name:(Lib_info.package info)
          ~promote_in_source:false
@@ -1170,7 +1172,9 @@ let setup_js_rules_libraries
         | None -> acc
         | Some sub -> if Lib.equal sub lib then acc else sub :: acc)
   in
-  let* library_emission = library_emission ~sctx ~dir ~requires_link ~compile_flags mel in
+  let* library_emission =
+    library_emission ~sctx ~scope ~dir ~requires_link ~compile_flags mel
+  in
   let+ dir_targets =
     Memo.parallel_map requires_link ~f:(fun lib ->
       let info = Lib.info lib in

@@ -62,7 +62,7 @@ The emitted `char.js` rule must keep the wrapped `Stdlib` module visible, even
 though `Stdlib__Char` does not reach it through implementation-only deps.
 
   $ dune describe rules -r --format=json --display=quiet --profile=release dist/node_modules/foo/char.js |
-  > jq_dune '[ rulesMatchingTargetFilter(test("/\\.melange/[0-9a-f]+/node_modules/foo/char\\.js$")) ]' > char-rules.json
+  > jq_dune '[ runRulesMatchingTarget("node_modules/foo/char.js") ]' > char-rules.json
   $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmi' char-rules.json
   1
   $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmj' char-rules.json
@@ -76,7 +76,7 @@ The wrapped `Stdlib` module must also be visible when the emit stanza uses its
 default compile flags.
 
   $ dune describe rules -r --format=json --display=quiet --profile=release dist-default-flags/node_modules/foo/char.js |
-  > jq_dune '[ rulesMatchingTargetFilter(test("/\\.melange/[0-9a-f]+/node_modules/foo/char\\.js$")) ]' > char-default-rules.json
+  > jq_dune '[ runRulesMatchingTarget("node_modules/foo/char.js") ]' > char-default-rules.json
   $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmi' char-default-rules.json
   0
   [1]

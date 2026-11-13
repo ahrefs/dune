@@ -3,10 +3,11 @@ The rules should include cmjs of dependencies as well.
 
 Make sure no byte folders are included.
 
-  $ dune rules multilib/x/m_2.js  | tr -s '\n' ' ' |
-  > grep -ce "byte"
-  0
-  [1]
+  $ dune rules -r --format=json multilib/x/m_2.js |
+  > jq_dune -r 'runRulesMatchingTarget("x/m_2.js") | ruleActionRunArgv | .[] | select(contains(".objs"))'
+  x/.x.objs/melange
+  lib/.lib.objs/melange
+  x/.x.objs/melange/x__M_2.cmj
 
 Test resulting file
 
