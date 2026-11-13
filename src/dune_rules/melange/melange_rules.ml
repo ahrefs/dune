@@ -93,7 +93,128 @@ let output_of_lib =
       public_lib ~info ~target_dir (Lib_info.name info)
 ;;
 
-let js_outputs_of_module ~module_systems ~output m =
+(* The JavaScript of a library module is the same in every [melange.emit]
+   target that uses the same emission configuration: [melc] derives import
+   paths from the [.cmj] files and the output file extension, not from the
+   output directory. Library modules are therefore emitted once per
+   configuration under [_build/<context>/.melange/<digest>/], using the same
+   layout as in a target directory, and copied into each target.
+
+   The shared rules run with the [melc] and the environment of the context
+   root. Rules for a digest directory are generated on demand from the reverse
+   table, like ppx drivers. *)
+module Shared = struct
+  module Config = struct
+    (* Values of this type are kept in a global table between builds, so they
+       must not embed values that are not safe to keep between builds. *)
+    type t =
+      { project_root : Path.Source.t
+        (* Project of the [melange.emit] stanza. Libraries are resolved in its
+           scope, and the melange extension version comes from it. *)
+      ; lib : Lib_name.t
+      ; allow_overlaps : bool
+      ; module_system : Melange.Module_system.t
+      ; js_ext : Filename.Extension.t
+      ; flags : string list
+      }
+
+    let repr =
+      Repr.record
+        "melange-emission-config"
+        [ Repr.field "project_root" Path.Source.repr ~get:(fun t -> t.project_root)
+        ; Repr.field "lib" Lib_name.repr ~get:(fun t -> t.lib)
+        ; Repr.field "allow_overlaps" Repr.bool ~get:(fun t -> t.allow_overlaps)
+        ; Repr.field
+            "module_system"
+            (Repr.view Repr.string ~to_:Melange.Module_system.to_string)
+            ~get:(fun t -> t.module_system)
+        ; Repr.field
+            "js_ext"
+            (Repr.view Repr.string ~to_:Filename.Extension.to_string)
+            ~get:(fun t -> t.js_ext)
+        ; Repr.field "flags" (Repr.list Repr.string) ~get:(fun t -> t.flags)
+        ]
+    ;;
+
+    let to_dyn = Repr.to_dyn repr
+
+    let equal x y =
+      Path.Source.equal x.project_root y.project_root
+      && Lib_name.equal x.lib y.lib
+      && Bool.equal x.allow_overlaps y.allow_overlaps
+      && (match x.module_system, y.module_system with
+          | Melange.Module_system.ESM, Melange.Module_system.ESM | CommonJS, CommonJS ->
+            true
+          | ESM, CommonJS | CommonJS, ESM -> false)
+      && Filename.Extension.equal x.js_ext y.js_ext
+      && List.equal String.equal x.flags y.flags
+    ;;
+  end
+
+  (* Stale entries from previous builds are harmless: an entry is only ever
+     looked up by the digest of its own contents. *)
+  let reverse_table : (Digest.t, Config.t) Table.t = Table.create (module Digest) 128
+
+  let encode (x : Config.t) =
+    let y = Digest.repr Config.repr x in
+    match Table.find reverse_table y with
+    | None ->
+      Table.set reverse_table y x;
+      y
+    | Some x' ->
+      if Config.equal x x'
+      then y
+      else
+        Code_error.raise
+          "hash collision between melange emission configurations"
+          [ "cache", Config.to_dyn x'; "fetch", Config.to_dyn x ]
+  ;;
+
+  let decode y =
+    match Table.find reverse_table y with
+    | Some x -> x
+    | None ->
+      User_error.raise
+        [ Pp.textf
+            "I don't know what melange emission configuration %s corresponds to."
+            (Digest.to_string y)
+        ]
+  ;;
+
+  let root ~build_dir =
+    Path.Build.relative build_dir (Filename.to_string Filename.melange_dir_basename)
+  ;;
+
+  (* The part of the configuration shared by all the libraries of a
+     [melange.emit] stanza. *)
+  type t =
+    { build_dir : Path.Build.t
+    ; project_root : Path.Source.t
+    ; allow_overlaps : bool
+    ; flags : string list
+    }
+
+  let lib_dir
+        { build_dir; project_root; allow_overlaps; flags }
+        ~module_system
+        ~js_ext
+        lib
+    =
+    let key =
+      encode
+        { Config.project_root
+        ; lib = Lib.name lib
+        ; allow_overlaps
+        ; module_system
+        ; js_ext
+        ; flags
+        }
+    in
+    Path.Build.relative (root ~build_dir) (Digest.to_string key)
+  ;;
+end
+
+let js_output_of_module ~output ~js_ext m =
   let dst_dir =
     let src_dir =
       Module.source m ~ml_kind:Impl
@@ -104,9 +225,12 @@ let js_outputs_of_module ~module_systems ~output m =
     Output_kind.output_path output src_dir
   in
   let basename = Module_compilation.melange_js_basename m in
+  Path.Build.relative_fname dst_dir (Filename.add_extension basename js_ext)
+;;
+
+let js_outputs_of_module ~module_systems ~output m =
   Nonempty_list.to_list_map module_systems ~f:(fun (module_system, js_ext) ->
-    let basename = Filename.add_extension basename js_ext in
-    module_system, Path.Build.relative_fname dst_dir basename)
+    module_system, js_output_of_module ~output ~js_ext m)
 ;;
 
 let instrument_preprocess ~scope preprocess =
@@ -865,122 +989,248 @@ let setup_entries_js
   directory_targets
 ;;
 
-let setup_js_rules_libraries =
-  let parallel_build_source_modules ~compile_flags ~sctx ~scope ~f:build_js lib =
-    let info = Lib.info lib in
-    let* same_lib_emission_deps, source_modules =
-      let+ lib_modules, source_modules =
-        impl_only_modules_defined_in_this_lib ~sctx ~scope ~info lib
-      in
-      let same_lib_emission_deps =
-        match Lib.Local.of_lib lib with
-        | None ->
-          (* Installed libraries may have private helper modules that are not
-             exposed through their installed module metadata. Conservatively
-             depend on all Melange object dirs so sandboxed emission can still
-             resolve same-library private modules and future cross-module
-             optimization has the interface metadata it needs. *)
-          make_external_lib_emission_deps ~obj_dir:(Lib_info.obj_dir info)
-        | Some lib ->
-          make_same_lib_emission_deps
-            ~sctx
-            ~compile_flags
-            ~modules:lib_modules
-            ~obj_dir:(Lib.Local.obj_dir lib)
-      in
-      same_lib_emission_deps, source_modules
+let parallel_build_source_modules ~compile_flags ~sctx ~scope ~f:build_js lib =
+  let info = Lib.info lib in
+  let* same_lib_emission_deps, source_modules =
+    let+ lib_modules, source_modules =
+      impl_only_modules_defined_in_this_lib ~sctx ~scope ~info lib
     in
-    Memo.parallel_iter source_modules ~f:(build_js ~same_lib_emission_deps)
+    let same_lib_emission_deps =
+      match Lib.Local.of_lib lib with
+      | None ->
+        (* Installed libraries may have private helper modules that are not
+           exposed through their installed module metadata. Conservatively
+           depend on all Melange object dirs so sandboxed emission can still
+           resolve same-library private modules and future cross-module
+           optimization has the interface metadata it needs. *)
+        make_external_lib_emission_deps ~obj_dir:(Lib_info.obj_dir info)
+      | Some lib ->
+        make_same_lib_emission_deps
+          ~sctx
+          ~compile_flags
+          ~modules:lib_modules
+          ~obj_dir:(Lib.Local.obj_dir lib)
+    in
+    same_lib_emission_deps, source_modules
   in
-  fun ~dir
-    ~scope
-    ~target_dir
-    ~sctx
-    ~requires_link
-    ~lib_config
-    ~compile_flags
-    ~promote_in_source
-    ~mode
-    (mel : Melange_stanzas.Emit.t) ->
-    let build_js = build_js ~sctx ~scope ~mode ~module_systems:mel.module_systems in
-    let with_vlib_implementations =
-      let vlib_implementations =
-        (* vlib_name => concrete_impl *)
-        List.fold_left requires_link ~init:Lib_name.Map.empty ~f:(fun acc dep ->
-          match Lib_info.implements (Lib.info dep) with
-          | None -> acc
-          | Some (_, vlib_name) -> Lib_name.Map.add_exn acc vlib_name dep)
-      in
-      fun lib deps ->
-        (* Depend on the concrete implementations of virtual libraries so
-           that Melange can find their `.cmj` files. *)
-        List.fold_left deps ~init:deps ~f:(fun acc dep ->
-          match Lib_name.Map.find vlib_implementations (Lib.name dep) with
-          | None -> acc
-          | Some sub -> if Lib.equal sub lib then acc else sub :: acc)
+  Memo.parallel_iter source_modules ~f:(build_js ~same_lib_emission_deps)
+;;
+
+(* Where the library JavaScript of a [melange.emit] target comes from. *)
+type library_emission =
+  | Per_target
+  | Shared of Shared.t
+
+let library_emission
+      ~sctx
+      ~scope
+      ~dir
+      ~requires_link
+      ~compile_flags
+      (mel : Melange_stanzas.Emit.t)
+  =
+  if List.exists requires_link ~f:(fun lib -> Option.is_some (Lib.implements lib))
+  then
+    (* With virtual libraries, the include path of a library depends on the
+       implementations selected by the stanza. *)
+    Memo.return Per_target
+  else
+    let* flags, deps =
+      Action_builder.evaluate_and_collect_deps (Ocaml_flags.get compile_flags Melange)
     in
-    let+ dir_targets =
-      Memo.parallel_map requires_link ~f:(fun lib ->
-        let info = Lib.info lib in
-        let build_js =
-          let loc = Lib_info.loc info in
-          let obj_dir = Lib_info.obj_dir info in
-          let pkg_name = Lib_info.package info in
-          build_js ~loc ~promote_in_source ~pkg_name ~obj_dir
-        in
-        let output = output_of_lib ~target_dir ~info lib in
-        let* includes =
-          let+ requires_link =
-            requires_link_for_lib
-              ~scope
-              ~allow_overlaps:mel.allow_overlapping_dependencies
-              lib
-            |> Resolve.Memo.map ~f:(with_vlib_implementations lib)
-          in
-          cmj_includes ~requires_link ~scope lib_config
-        in
-        let+ directory_targets =
-          setup_runtime_assets_rules
-            sctx
+    if not (Dep.Set.is_empty deps)
+    then Memo.return Per_target
+    else (
+      let build_dir = Super_context.context sctx |> Context.build_dir in
+      let shared_root = Shared.root ~build_dir in
+      let external_env dir = Super_context.env_node sctx ~dir >>= Env_node.external_env in
+      let+ melc = Melange_binary.melc sctx ~loc:(Some mel.loc) ~dir
+      and+ shared_melc = Melange_binary.melc sctx ~loc:(Some mel.loc) ~dir:shared_root
+      and+ env = external_env dir
+      and+ shared_env = external_env shared_root in
+      match melc, shared_melc with
+      | Ok melc, Ok shared_melc
+        when Path.equal melc shared_melc && Env.equal env shared_env ->
+        Shared
+          { Shared.build_dir
+          ; project_root = Dune_project.root (Scope.project scope)
+          ; allow_overlaps = mel.allow_overlapping_dependencies
+          ; flags
+          }
+      | _, _ -> Per_target)
+;;
+
+let copy_shared_js ~sctx ~scope ~dir ~mode ~module_systems ~output ~shared lib =
+  let info = Lib.info lib in
+  let* _, source_modules = impl_only_modules_defined_in_this_lib ~sctx ~scope ~info lib in
+  let loc = Lib_info.loc info in
+  let project = Scope.project scope in
+  let promote_in_source = should_promote_in_source scope in
+  Nonempty_list.to_list module_systems
+  |> Memo.parallel_iter ~f:(fun (module_system, js_ext) ->
+    let shared_output =
+      let target_dir = Shared.lib_dir shared ~module_system ~js_ext lib in
+      output_of_lib ~target_dir ~info lib
+    in
+    Memo.parallel_iter source_modules ~f:(fun m ->
+      let src = js_output_of_module ~output:shared_output ~js_ext m in
+      let dst = js_output_of_module ~output ~js_ext m in
+      let mode =
+        compute_promote_in_source
+          ~promote_in_source
+          ~project
+          ~dir
+          ~output
+          ~mode
+          ~src:(Module.source_without_pp m ~ml_kind:Impl |> Option.value_exn)
+          ~dst
+      in
+      add_rule sctx ~dir ~loc ~mode (Action_builder.copy ~src:(Path.build src) ~dst)))
+;;
+
+let setup_shared_rules sctx ~dir key =
+  let { Shared.Config.project_root; lib; allow_overlaps; module_system; js_ext; flags } =
+    match Digest.from_hex key with
+    | Some key -> Shared.decode key
+    | None ->
+      User_error.raise
+        [ Pp.textf
+            "invalid melange emission directory %s"
+            (Path.Build.to_string_maybe_quoted dir)
+        ]
+  in
+  let ctx = Super_context.context sctx in
+  let* scope = Scope.DB.find_by_project_root ctx (Some project_root) in
+  let* lib =
+    Lib.DB.find_even_when_hidden (Scope.libs scope) lib
+    >>| function
+    | Some lib -> lib
+    | None ->
+      User_error.raise
+        [ Pp.textf
+            "Library %S used by a melange.emit stanza no longer exists."
+            (Lib_name.to_string lib)
+        ]
+  in
+  let* lib_config =
+    let+ ocaml = Context.ocaml ctx in
+    ocaml.lib_config
+  and* requires_link = requires_link_for_lib ~scope ~allow_overlaps lib in
+  let info = Lib.info lib in
+  let compile_flags = Ocaml_flags.of_list flags in
+  parallel_build_source_modules
+    ~compile_flags
+    ~sctx
+    ~scope
+    lib
+    ~f:
+      (build_js
+         ~loc:(Lib_info.loc info)
+         ~dir
+         ~scope
+         ~pkg_name:(Lib_info.package info)
+         ~promote_in_source:false
+         ~mode:Rule.Mode.Standard
+         ~module_systems:[ module_system, js_ext ]
+         ~output:(output_of_lib ~target_dir:dir ~info lib)
+         ~obj_dir:(Lib_info.obj_dir info)
+         ~sctx
+         ~includes:(cmj_includes ~requires_link ~scope lib_config)
+         ~compile_flags)
+;;
+
+let setup_js_rules_libraries
+      ~dir
+      ~scope
+      ~target_dir
+      ~sctx
+      ~requires_link
+      ~lib_config
+      ~compile_flags
+      ~library_emission
+      ~promote_in_source
+      ~mode
+      (mel : Melange_stanzas.Emit.t)
+  =
+  let build_js = build_js ~sctx ~scope ~mode ~module_systems:mel.module_systems in
+  let with_vlib_implementations =
+    let vlib_implementations =
+      (* vlib_name => concrete_impl *)
+      List.fold_left requires_link ~init:Lib_name.Map.empty ~f:(fun acc dep ->
+        match Lib_info.implements (Lib.info dep) with
+        | None -> acc
+        | Some (_, vlib_name) -> Lib_name.Map.add_exn acc vlib_name dep)
+    in
+    fun lib deps ->
+      (* Depend on the concrete implementations of virtual libraries so
+           that Melange can find their `.cmj` files. *)
+      List.fold_left deps ~init:deps ~f:(fun acc dep ->
+        match Lib_name.Map.find vlib_implementations (Lib.name dep) with
+        | None -> acc
+        | Some sub -> if Lib.equal sub lib then acc else sub :: acc)
+  in
+  let+ dir_targets =
+    Memo.parallel_map requires_link ~f:(fun lib ->
+      let info = Lib.info lib in
+      let build_js =
+        let loc = Lib_info.loc info in
+        let obj_dir = Lib_info.obj_dir info in
+        let pkg_name = Lib_info.package info in
+        build_js ~loc ~promote_in_source ~pkg_name ~obj_dir
+      in
+      let output = output_of_lib ~target_dir ~info lib in
+      let* includes =
+        let+ requires_link =
+          requires_link_for_lib
             ~scope
-            ~dir
-            ~mode
-            ~promote_in_source
-            ~output
-            ~for_:(`Library info)
-            mel
-        and+ () =
-          match Lib.implements lib with
-          | None -> Memo.return ()
-          | Some vlib ->
-            let* vlib = Resolve.Memo.read_memo vlib in
-            let vlib_info = Lib.info vlib in
-            let vlib_output = output_of_lib ~target_dir ~info:vlib_info vlib in
-            (match vlib_output, output with
-             | Public_library _, Private_library_or_emit _ ->
-               User_error.raise
-                 ~loc:(Lib_info.loc info)
-                 [ Pp.text
-                     "Dune doesn't currently support building private implementations of \
-                      virtual public libaries for `(modes melange)`"
+            ~allow_overlaps:mel.allow_overlapping_dependencies
+            lib
+          |> Resolve.Memo.map ~f:(with_vlib_implementations lib)
+        in
+        cmj_includes ~requires_link ~scope lib_config
+      in
+      let+ directory_targets =
+        setup_runtime_assets_rules
+          sctx
+          ~scope
+          ~dir
+          ~mode
+          ~promote_in_source
+          ~output
+          ~for_:(`Library info)
+          mel
+      and+ () =
+        match Lib.implements lib with
+        | None -> Memo.return ()
+        | Some vlib ->
+          let* vlib = Resolve.Memo.read_memo vlib in
+          let vlib_info = Lib.info vlib in
+          let vlib_output = output_of_lib ~target_dir ~info:vlib_info vlib in
+          (match vlib_output, output with
+           | Public_library _, Private_library_or_emit _ ->
+             User_error.raise
+               ~loc:(Lib_info.loc info)
+               [ Pp.text
+                   "Dune doesn't currently support building private implementations of \
+                    virtual public libaries for `(modes melange)`"
+               ]
+               ~hints:
+                 [ Pp.textf
+                     "Add a `public_name` to the library `%s'."
+                     (Lib_name.to_string (Lib_info.name info))
                  ]
-                 ~hints:
-                   [ Pp.textf
-                       "Add a `public_name` to the library `%s'."
-                       (Lib_name.to_string (Lib_info.name info))
-                   ]
-             | Public_library _, Public_library _ | Private_library_or_emit _, _ ->
-               let* includes =
+           | Public_library _, Public_library _ | Private_library_or_emit _, _ ->
+             let* includes =
+               let+ requires_link =
                  let+ requires_link =
-                   let+ requires_link =
-                     requires_link_for_lib
-                       ~scope
-                       ~allow_overlaps:mel.allow_overlapping_dependencies
-                       vlib
-                   in
-                   let open Resolve.O in
-                   let+ requires_link = requires_link in
-                   (* Whenever a `concrete_lib` implementation contains a field
+                   requires_link_for_lib
+                     ~scope
+                     ~allow_overlaps:mel.allow_overlapping_dependencies
+                     vlib
+                 in
+                 let open Resolve.O in
+                 let+ requires_link = requires_link in
+                 (* Whenever a `concrete_lib` implementation contains a field
                     `(implements virt_lib)`, we also set up the JS targets for the
                     modules defined in `virt_lib`.
 
@@ -990,27 +1240,39 @@ let setup_js_rules_libraries =
                     `virt_lib` depend on `concrete_lib`, such that Melange can find
                     the correct `.cmj` file, which is needed to emit the correct
                     path in `import` / `require`. *)
-                   lib :: requires_link
-                 in
-                 cmj_includes ~requires_link ~scope lib_config
+                 lib :: requires_link
                in
-               parallel_build_source_modules
-                 ~compile_flags
-                 ~sctx
-                 ~scope
-                 vlib
-                 ~f:(build_js ~dir ~output:vlib_output ~includes ~compile_flags))
-        and+ () =
+               cmj_includes ~requires_link ~scope lib_config
+             in
+             parallel_build_source_modules
+               ~compile_flags
+               ~sctx
+               ~scope
+               vlib
+               ~f:(build_js ~dir ~output:vlib_output ~includes ~compile_flags))
+      and+ () =
+        match library_emission with
+        | Per_target ->
           parallel_build_source_modules
             ~compile_flags
             ~sctx
             ~scope
             lib
             ~f:(build_js ~dir ~output ~includes ~compile_flags)
-        in
-        directory_targets)
-    in
-    List.fold_left dir_targets ~init:Path.Build.Map.empty ~f:Path.Build.Map.union_exn
+        | Shared shared ->
+          copy_shared_js
+            ~sctx
+            ~scope
+            ~dir
+            ~mode
+            ~module_systems:mel.module_systems
+            ~output
+            ~shared
+            lib
+      in
+      directory_targets)
+  in
+  List.fold_left dir_targets ~init:Path.Build.Map.empty ~f:Path.Build.Map.union_exn
 ;;
 
 let setup_js_rules_libraries_and_entries
@@ -1028,6 +1290,9 @@ let setup_js_rules_libraries_and_entries
     let+ ocaml = Super_context.context sctx |> Context.ocaml in
     ocaml.lib_config
   and* compile_flags = melange_compile_flags ~sctx ~dir mel in
+  let* library_emission =
+    library_emission ~sctx ~scope ~dir ~requires_link ~compile_flags mel
+  in
   let+ dir_targets_libraries =
     setup_js_rules_libraries
       ~dir
@@ -1037,6 +1302,7 @@ let setup_js_rules_libraries_and_entries
       ~requires_link
       ~lib_config
       ~compile_flags
+      ~library_emission
       ~promote_in_source
       ~mode
       mel

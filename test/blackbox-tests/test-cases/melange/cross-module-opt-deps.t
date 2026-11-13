@@ -61,24 +61,26 @@ loads implicitly.
 The emitted `char.js` rule must keep the wrapped `Stdlib` module visible, even
 though `Stdlib__Char` does not reach it through implementation-only deps.
 
-  $ dune describe rules --display=quiet --profile=release dist/node_modules/foo/char.js > char-rules.sexp
-  $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmi' char-rules.sexp
+  $ dune describe rules -r --format=json --display=quiet --profile=release dist/node_modules/foo/char.js |
+  > jq_dune '[ rulesMatchingTargetFilter(test("/\\.melange/[0-9a-f]+/node_modules/foo/char\\.js$")) ]' > char-rules.json
+  $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmi' char-rules.json
   1
-  $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmj' char-rules.sexp
+  $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmj' char-rules.json
   1
-  $ grep -c 'stdlib/.stdlib.objs/melange/camlinternalFormatBasics.cmi' char-rules.sexp
+  $ grep -c 'stdlib/.stdlib.objs/melange/camlinternalFormatBasics.cmi' char-rules.json
   1
-  $ grep -c 'stdlib/.stdlib.objs/melange/stdlib__Char.cmi' char-rules.sexp
+  $ grep -c 'stdlib/.stdlib.objs/melange/stdlib__Char.cmi' char-rules.json
   1
 
 The wrapped `Stdlib` module must also be visible when the emit stanza uses its
 default compile flags.
 
-  $ dune describe rules --display=quiet --profile=release dist-default-flags/node_modules/foo/char.js > char-default-rules.sexp
-  $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmi' char-default-rules.sexp
+  $ dune describe rules -r --format=json --display=quiet --profile=release dist-default-flags/node_modules/foo/char.js |
+  > jq_dune '[ rulesMatchingTargetFilter(test("/\\.melange/[0-9a-f]+/node_modules/foo/char\\.js$")) ]' > char-default-rules.json
+  $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmi' char-default-rules.json
   0
   [1]
-  $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmj' char-default-rules.sexp
+  $ grep -c 'stdlib/.stdlib.objs/melange/stdlib.cmj' char-default-rules.json
   1
 
 Build the default output explicitly in a sandbox so the regression does not

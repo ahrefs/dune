@@ -605,6 +605,7 @@ let gen_rules_regular_directory (sctx : Super_context.t Memo.t) ~src_dir ~compon
                   ; Filename.doc_dir_basename
                   ; Filename.doc_new_dir_basename
                   ; Filename.ppx_dir_basename
+                  ; Filename.melange_dir_basename
                   ; Filename.dune_dir_basename
                   ; Filename.topmod_dir_basename
                   ; Filename.of_string_exn Dune_lang.Oxcaml.parameterised_dir
@@ -704,6 +705,14 @@ let gen_rules ctx sctx ~dir components : Gen_rules.t Memo.t =
       (fun () ->
          let* sctx = sctx in
          Pp_spec_rules.gen_rules sctx rest)
+  | ".melange" :: rest ->
+    (match rest with
+     | [] -> has_rules ~dir Subdir_set.all (fun () -> Memo.return ())
+     | [ key ] ->
+       has_rules ~dir Subdir_set.empty (fun () ->
+         let* sctx = sctx in
+         Melange_rules.setup_shared_rules sctx ~dir key)
+     | _ :: _ :: _ -> Memo.return (Gen_rules.Redirect_to_parent Gen_rules.Rules.empty))
   | [ ".dune" ] ->
     has_rules ~dir Subdir_set.empty (fun () -> Configurator_rules.gen_rules ctx)
   | parameterised_dir :: rest

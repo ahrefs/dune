@@ -64,7 +64,8 @@ module's interface.
 With xopt enabled, the `entry.js` emission rule must stage the interface
 closure and the same-library implementation closure it reaches.
 
-  $ dune describe rules --root . --format=json --display=quiet --profile=release dist_xopt/node_modules/repro/entry.js > xopt-rules.json
+  $ dune describe rules -r --root . --format=json --display=quiet --profile=release dist_xopt/node_modules/repro/entry.js |
+  > jq_dune '[ rulesMatchingTargetFilter(test("/\\.melange/[0-9a-f]+/node_modules/repro/entry\\.js$")) ]' > xopt-rules.json
   $ jq_dune '[ .[] | ruleDepFilePaths | select(test("lib/\\.repro\\.objs/melange/dep\\.cmi$")) ] | length' xopt-rules.json
   1
   $ jq_dune '[ .[] | ruleDepFilePaths | select(test("lib/\\.repro\\.objs/melange/dep\\.cmj$")) ] | length' xopt-rules.json
@@ -77,7 +78,8 @@ closure and the same-library implementation closure it reaches.
 Without xopt, the same emitted module should not stage those extra same-library
 dependencies.
 
-  $ dune describe rules --root . --format=json --display=quiet --profile=release dist_no_xopt/node_modules/repro/entry.js > no-xopt-rules.json
+  $ dune describe rules -r --root . --format=json --display=quiet --profile=release dist_no_xopt/node_modules/repro/entry.js |
+  > jq_dune '[ rulesMatchingTargetFilter(test("/\\.melange/[0-9a-f]+/node_modules/repro/entry\\.js$")) ]' > no-xopt-rules.json
   $ jq_dune '[ .[] | ruleDepFilePaths | select(test("lib/\\.repro\\.objs/melange/dep\\.cmi$")) ] | length' no-xopt-rules.json
   0
   $ jq_dune '[ .[] | ruleDepFilePaths | select(test("lib/\\.repro\\.objs/melange/dep\\.cmj$")) ] | length' no-xopt-rules.json

@@ -15,7 +15,7 @@ Cmj rules should not include --bs-package-name
   $ output=inside/output
 
 Js rules should include module type
-  $ dune rules $output/inside/app/b.mjs |
+  $ dune rules -r $output/inside/app/b.mjs |
   > grep -e "--bs-module-type" --after-context=1
       --bs-module-type
       es6

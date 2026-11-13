@@ -206,6 +206,7 @@ let js_dir_basename = Extension.to_filename Extension.js
 let lock_dune = "lock.dune"
 let lock_dir_basename = ".lock"
 let make = "make"
+let melange_dir_basename = ".melange"
 let merlin_conf_dir_basename = ".merlin-conf"
 let meta = "META"
 let ocamlfind = "ocamlfind"

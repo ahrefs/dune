@@ -1,5 +1,6 @@
-Several melange.emit stanzas use the same libraries. Each stanza emits its own
-copy of every library module into its target.
+Library modules are emitted once per emission configuration in
+_build/default/.melange/<digest> and copied into every melange.emit target
+that uses them.
 
   $ cat > dune-project <<EOF
   > (lang dune 3.8)
@@ -83,38 +84,41 @@ flags, the fifth one its own environment.
 
   $ dune build @mel
   $ melc_outputs
+  .melange/$DIGEST/node_modules/pkg.__private__.privpkg/privpkg.js
+  .melange/$DIGEST/node_modules/pkg.__private__.privpkg/privpkg.mjs
+  .melange/$DIGEST/node_modules/pkg.__private__.privpkg/privpkg.mjs
+  .melange/$DIGEST/node_modules/pkg.pub/base.js
+  .melange/$DIGEST/node_modules/pkg.pub/base.mjs
+  .melange/$DIGEST/node_modules/pkg.pub/base.mjs
+  .melange/$DIGEST/node_modules/pkg.pub/sub/pub_sub.js
+  .melange/$DIGEST/node_modules/pkg.pub/sub/pub_sub.mjs
+  .melange/$DIGEST/node_modules/pkg.pub/sub/pub_sub.mjs
+  .melange/$DIGEST/priv/priv.js
+  .melange/$DIGEST/priv/priv.mjs
+  .melange/$DIGEST/priv/priv.mjs
   a/out/a/main.js
   a/out/a/main.mjs
-  a/out/node_modules/pkg.__private__.privpkg/privpkg.js
-  a/out/node_modules/pkg.__private__.privpkg/privpkg.mjs
-  a/out/node_modules/pkg.pub/base.js
-  a/out/node_modules/pkg.pub/base.mjs
-  a/out/node_modules/pkg.pub/sub/pub_sub.js
-  a/out/node_modules/pkg.pub/sub/pub_sub.mjs
-  a/out/priv/priv.js
-  a/out/priv/priv.mjs
   b/c/out/b/c/main.mjs
-  b/c/out/node_modules/pkg.__private__.privpkg/privpkg.mjs
-  b/c/out/node_modules/pkg.pub/base.mjs
-  b/c/out/node_modules/pkg.pub/sub/pub_sub.mjs
-  b/c/out/priv/priv.mjs
   d/out/d/main.mjs
-  d/out/node_modules/pkg.__private__.privpkg/privpkg.mjs
-  d/out/node_modules/pkg.pub/base.mjs
-  d/out/node_modules/pkg.pub/sub/pub_sub.mjs
-  d/out/priv/priv.mjs
   e/out/e/main.mjs
   e/out/node_modules/pkg.__private__.privpkg/privpkg.mjs
   e/out/node_modules/pkg.pub/base.mjs
   e/out/node_modules/pkg.pub/sub/pub_sub.mjs
   e/out/priv/priv.mjs
 
+One directory per library and configuration: 3 libraries times es6/mjs,
+commonjs/js and the flags of d/. The stanza in e/ has its own environment and
+emits its own copy.
+
+  $ ls _build/default/.melange | wc -l | tr -d ' '
+  9
+
 A no-op rebuild runs no melc.
 
   $ dune build @mel
   $ melc_outputs
 
-Every target has the same files, and the library files are identical.
+Every target has the same files, and the shared ones are identical.
 
   $ for d in a b/c d e; do
   >   (cd _build/default/$d/out && find . -name '*.mjs' -o -name '*.txt' | grep -v main | sort)
@@ -137,7 +141,7 @@ Every target has the same files, and the library files are identical.
   $ node _build/default/a/out/a/main.js
   pub-sub-privpkg
 
-Library files are promoted with the stanza.
+Promotion still applies to the copies.
 
   $ find a/out -name '*.*js' | sort
   a/out/a/main.js
@@ -151,27 +155,24 @@ Library files are promoted with the stanza.
   a/out/priv/priv.js
   a/out/priv/priv.mjs
 
-Changing a library re-emits it in every target.
+Changing a library re-emits it once per configuration and updates every target.
 
   $ echo 'let x = "PUB"' > pub/base.ml
   $ dune build @mel
   $ melc_outputs
+  .melange/$DIGEST/node_modules/pkg.pub/base.js
+  .melange/$DIGEST/node_modules/pkg.pub/base.mjs
+  .melange/$DIGEST/node_modules/pkg.pub/base.mjs
+  .melange/$DIGEST/node_modules/pkg.pub/sub/pub_sub.js
+  .melange/$DIGEST/node_modules/pkg.pub/sub/pub_sub.mjs
+  .melange/$DIGEST/node_modules/pkg.pub/sub/pub_sub.mjs
+  .melange/$DIGEST/priv/priv.js
+  .melange/$DIGEST/priv/priv.mjs
+  .melange/$DIGEST/priv/priv.mjs
   a/out/a/main.js
   a/out/a/main.mjs
-  a/out/node_modules/pkg.pub/base.js
-  a/out/node_modules/pkg.pub/base.mjs
-  a/out/node_modules/pkg.pub/sub/pub_sub.js
-  a/out/node_modules/pkg.pub/sub/pub_sub.mjs
-  a/out/priv/priv.js
-  a/out/priv/priv.mjs
   b/c/out/b/c/main.mjs
-  b/c/out/node_modules/pkg.pub/base.mjs
-  b/c/out/node_modules/pkg.pub/sub/pub_sub.mjs
-  b/c/out/priv/priv.mjs
   d/out/d/main.mjs
-  d/out/node_modules/pkg.pub/base.mjs
-  d/out/node_modules/pkg.pub/sub/pub_sub.mjs
-  d/out/priv/priv.mjs
   e/out/e/main.mjs
   e/out/node_modules/pkg.pub/base.mjs
   e/out/node_modules/pkg.pub/sub/pub_sub.mjs
@@ -184,7 +185,8 @@ Changing a library re-emits it in every target.
   $ node a/out/a/main.mjs
   PUB-sub-privpkg
 
-Two stanzas that emit the stdlib each emit their own copy of it.
+A library used by a single stanza is shared too, and the stdlib is shared
+between stanzas that emit it.
 
   $ mkdir f g
   $ cat > f/dune <<EOF
@@ -197,8 +199,7 @@ Two stanzas that emit the stdlib each emit their own copy of it.
   $ cp f/main.ml g/main.ml
   $ dune build @std
   $ melc_outputs | grep '/out/node_modules/' | cut -d / -f 1 | sort -u
-  f
-  g
+  [1]
   $ node _build/default/f/out/f/main.mjs
   1
   $ diff -r _build/default/f/out/node_modules _build/default/g/out/node_modules

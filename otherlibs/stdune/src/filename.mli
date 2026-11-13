@@ -139,6 +139,7 @@ val js_dir_basename : t
 val lock_dune : t
 val lock_dir_basename : t
 val make : t
+val melange_dir_basename : t
 val merlin_conf_dir_basename : t
 val meta : t
 val ocamlfind : t
